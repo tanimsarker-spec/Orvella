@@ -141,8 +141,9 @@ class _DriveScreenState extends ConsumerState<DriveScreen>
   }
 
   Widget _body(BuildContext context) {
-    if (_loading && _files.isEmpty && !_waiting)
-      return const Center(child: CircularProgressIndicator());
+          if (_loading && _files.isEmpty && !_waiting) {
+         return const Center(child: CircularProgressIndicator());
+       }
     if (!_enabled) {
       return const Center(
         child: Padding(
