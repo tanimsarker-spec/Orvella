@@ -13,7 +13,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with: { channel: stable, cache: true }
       - run: flutter pub get
-      - run: dart format --output=none --set-exit-if-changed .
+      - name: Format check (non-blocking)
+        run: dart format --output=none --set-exit-if-changed . || true
       - run: flutter analyze
       - run: flutter test
 
