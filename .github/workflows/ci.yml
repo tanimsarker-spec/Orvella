@@ -37,6 +37,28 @@ jobs:
         run: |
           f=android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' "$f" || sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$f"
+      - name: Compile all Android plugins against SDK 36
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          for name in ("android/build.gradle.kts", "android/build.gradle"):
+              p = pathlib.Path(name)
+              if not p.exists():
+                  continue
+              s = p.read_text()
+              if "compileSdkVersion(36)" in s or "compileSdkVersion 36" in s:
+                  break
+              if name.endswith(".kts"):
+                  block = 'subprojects {\n    afterEvaluate {\n        extensions.findByName("android")?.withGroovyBuilder { "compileSdkVersion"(36) }\n    }\n}\n\n'
+              else:
+                  block = 'subprojects {\n    afterEvaluate { project ->\n        if (project.hasProperty("android")) { project.android { compileSdkVersion 36 } }\n    }\n}\n\n'
+              idx = s.find("evaluationDependsOn")
+              pos = s.rfind("subprojects {", 0, idx) if idx >= 0 else -1
+              s = s[:pos] + block + s[pos:] if pos >= 0 else s + "\n" + block
+              p.write_text(s)
+              print("patched", name)
+              break
+          PY
       - run: flutter pub get
       - run: flutter build apk --debug --dart-define=ORVELLA_SERVER=${{ vars.ORVELLA_SERVER }}
       - uses: actions/upload-artifact@v4
