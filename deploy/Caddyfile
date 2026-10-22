@@ -1,0 +1,3 @@
+{$ORVELLA_DOMAIN} {
+	reverse_proxy orvella:8080
+}

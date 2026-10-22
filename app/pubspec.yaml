@@ -1,0 +1,34 @@
+name: orvella
+description: Orvella watch-together cinema app.
+publish_to: none
+version: 0.2.0+2
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.2.0
+  http: ^1.2.2
+  web_socket_channel: ^3.0.1
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+  file_picker: ^8.1.2
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  # fonts:
+  #   - family: Jost
+  #     fonts:
+  #       - asset: assets/fonts/Jost-ExtraLight.ttf
+  #         weight: 200

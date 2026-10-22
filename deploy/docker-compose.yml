@@ -1,0 +1,25 @@
+# Run on any VPS with Docker and a DNS name pointing at it.
+# Caddy obtains and renews the TLS certificate automatically and proxies WebSockets.
+services:
+  orvella:
+    build: { context: .., dockerfile: Dockerfile }
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      PUBLIC_URL: https://${ORVELLA_DOMAIN}
+      JWT_SECRET: ${JWT_SECRET}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+    expose: ["8080"]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      ORVELLA_DOMAIN: ${ORVELLA_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+volumes:
+  caddy_data:
