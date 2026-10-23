@@ -13,6 +13,7 @@ import '../../core/room_connection.dart';
 import '../../core/session.dart';
 import 'host_media_service.dart';
 import 'playback_sync.dart';
+import 'voice_chat.dart';
 
 /// Everything that lives while a room is open: control socket, player, sync, host file service.
 class RoomSession {
@@ -32,9 +33,15 @@ class RoomSession {
     video = VideoController(player);
     sync = PlaybackSync(player: player, connection: connection, userId: userId)
       ..start();
+    voice = VoiceChat(
+      connection: connection,
+      userId: userId,
+      iceServers: api.rtcConfig,
+    );
     _stateSub = connection.states.listen(
       (s) => _queue = _queue.then((_) => _handle(s)),
     );
+    unawaited(_loadInfo());
     _chatSub = connection.chat.listen((m) {
       chatLog.value = [...chatLog.value, m].takeLast(200);
     });
@@ -50,8 +57,11 @@ class RoomSession {
   late final Player player;
   late final VideoController video;
   late final PlaybackSync sync;
+  late final VoiceChat voice;
   final ValueNotifier<List<ChatMessage>> chatLog = ValueNotifier(const []);
   final ValueNotifier<String?> notice = ValueNotifier(null);
+  final ValueNotifier<RoomInfo?> info = ValueNotifier(null);
+  bool _disposed = false;
 
   StreamSubscription<RoomState>? _stateSub;
   StreamSubscription<ChatMessage>? _chatSub;
@@ -62,6 +72,13 @@ class RoomSession {
 
   bool get isHost => connection.lastState?.hostId == userId;
   int get hostedBytesSent => _hostMedia?.bytesSent ?? 0;
+
+  Future<void> _loadInfo() async {
+    try {
+      final r = await api.joinRoomInfo(roomId);
+      if (!_disposed) info.value = r;
+    } catch (_) {}
+  }
 
   Future<void> _handle(RoomState s) async {
     try {
@@ -129,14 +146,17 @@ class RoomSession {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     await _stateSub?.cancel();
     await _chatSub?.cancel();
+    await voice.dispose();
     await sync.dispose();
     await _hostMedia?.stop();
     await connection.dispose();
     await player.dispose();
     chatLog.dispose();
     notice.dispose();
+    info.dispose();
   }
 }
 

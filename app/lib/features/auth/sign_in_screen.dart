@@ -3,106 +3,101 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/session.dart';
+import 'google_button.dart';
 
-class SignInScreen extends ConsumerStatefulWidget {
-  const SignInScreen({super.key});
+/// First screen for signed-out users: two big buttons.
+class WelcomeScreen extends ConsumerWidget {
+  const WelcomeScreen({super.key});
 
-  @override
-  ConsumerState<SignInScreen> createState() => _SignInScreenState();
-}
-
-class _SignInScreenState extends ConsumerState<SignInScreen> {
-  late final TextEditingController _server;
-  final _name = TextEditingController();
-  bool _busy = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _server = TextEditingController(text: ref.read(sessionProvider).serverUrl);
-  }
-
-  @override
-  void dispose() {
-    _server.dispose();
-    _name.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await ref.read(sessionProvider.notifier).signIn(_server.text, _name.text);
-      if (mounted) context.go('/');
-    } catch (e) {
-      if (mounted) {
-        setState(
-          () => _error = e.toString().contains('invalid_display_name')
-              ? 'Use 1-32 letters, numbers, spaces or . _ -'
-              : 'Could not reach the server. Check the address and your connection.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  Future<void> _editServer(BuildContext context, WidgetRef ref) async {
+    final controller = TextEditingController(
+      text: ref.read(sessionProvider).serverUrl,
+    );
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Server (advanced)'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.url,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result != null) {
+      await ref.read(sessionProvider.notifier).setServerUrl(result);
     }
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Set up your account')),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
-            child: ListView(
+            child: Padding(
               padding: const EdgeInsetsDirectional.all(24),
-              shrinkWrap: true,
-              children: [
-                const Text(
-                  'Pick a display name. This creates a guest profile on the Orvella server; '
-                  'no email or password is collected.',
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _name,
-                  maxLength: 32,
-                  decoration: const InputDecoration(
-                    labelText: 'Display name',
-                    border: OutlineInputBorder(),
-                  ),
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _server,
-                  keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
-                    labelText: 'Server address',
-                    border: OutlineInputBorder(),
-                  ),
-                  onSubmitted: (value) => _busy ? null : _submit(),
-                ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsetsDirectional.only(top: 12),
-                    child: Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Long-press the logo to change the server (for testing only).
+                  GestureDetector(
+                    onLongPress: () => _editServer(context, ref),
+                    child: Icon(
+                      Icons.movie_filter_outlined,
+                      size: 88,
+                      color: scheme.primary,
                     ),
                   ),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: Text(_busy ? 'Connecting...' : 'Continue'),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Text(
+                    'Orvella',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displaySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Watch movies with your friends, together.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 40),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(64),
+                      textStyle: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    onPressed: () => context.push('/sign-up'),
+                    child: const Text('Create account'),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(64),
+                      textStyle: const TextStyle(fontSize: 18),
+                    ),
+                    onPressed: () => context.push('/log-in'),
+                    child: const Text('I already have an account'),
+                  ),
+                  const SizedBox(height: 12),
+                  const GoogleSignInButton(),
+                ],
+              ),
             ),
           ),
         ),

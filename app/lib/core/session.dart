@@ -50,20 +50,50 @@ class SessionController extends Notifier<SessionState> {
     );
   }
 
-  Future<void> signIn(String serverUrl, String displayName) async {
-    final url = serverUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final j = await ApiClient(url).guest(displayName.trim());
+  Future<void> signUp({
+    required String email,
+    required String password,
+    required String displayName,
+  }) async {
+    final j = await ApiClient(state.serverUrl).signUp(
+      email: email.trim(),
+      password: password,
+      displayName: displayName.trim(),
+    );
+    await storeLogin(j);
+  }
+
+  Future<void> logIn({required String email, required String password}) async {
+    final j = await ApiClient(state.serverUrl)
+        .logIn(email: email.trim(), password: password);
+    await storeLogin(j);
+  }
+
+  Future<void> storeLogin(Map<String, dynamic> j) async {
     final user = j['user'] as Map<String, dynamic>;
+    final token = j['token'] as String;
     final p = ref.read(prefsProvider);
-    await p.setString('serverUrl', url);
-    await p.setString('token', j['token'] as String);
+    await p.setString('token', token);
     await p.setString('userId', user['id'] as String);
     await p.setString('displayName', user['displayName'] as String);
     state = SessionState(
-      serverUrl: url,
-      token: j['token'] as String,
+      serverUrl: state.serverUrl,
+      token: token,
       userId: user['id'] as String,
       displayName: user['displayName'] as String,
+    );
+  }
+
+  /// Advanced/testing only: point the app at a different server.
+  Future<void> setServerUrl(String url) async {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) return;
+    await ref.read(prefsProvider).setString('serverUrl', clean);
+    state = SessionState(
+      serverUrl: clean,
+      token: state.token,
+      userId: state.userId,
+      displayName: state.displayName,
     );
   }
 

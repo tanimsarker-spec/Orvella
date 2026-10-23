@@ -1,6 +1,7 @@
 const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 const isStr = (v, min, max) => typeof v === 'string' && v.length >= min && v.length <= max;
 const POS_MAX = 24 * 3600 * 1000;
+export const REACTIONS = ['❤️', '😂', '😮', '😢', '👏', '🔥', '👍'];
 
 export function validateSource(s) {
   if (!s || typeof s !== 'object') return null;
@@ -46,6 +47,14 @@ export function validateClientMessage(m) {
       return isStr(m.text, 1, 500) && m.text.trim().length > 0
         ? { ok: true, value: { type: 'chat', text: m.text.trim() } }
         : { ok: false, error: 'bad_chat' };
+    case 'react':
+      return REACTIONS.includes(m.emoji)
+        ? { ok: true, value: { type: 'react', emoji: m.emoji } }
+        : { ok: false, error: 'bad_emoji' };
+    case 'setPublic':
+      return typeof m.value === 'boolean'
+        ? { ok: true, value: { type: 'setPublic', value: m.value } }
+        : { ok: false, error: 'bad_public' };
     case 'setControlMode':
       return m.mode === 'everyone' || m.mode === 'host'
         ? { ok: true, value: { type: 'setControlMode', mode: m.mode } }

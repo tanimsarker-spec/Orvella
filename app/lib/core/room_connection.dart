@@ -26,11 +26,15 @@ class RoomConnection {
   final _chat = StreamController<ChatMessage>.broadcast();
   final _status = StreamController<ConnectionStatus>.broadcast();
   final _errors = StreamController<String>.broadcast();
+  final _signals = StreamController<SignalMessage>.broadcast();
+  final _reactions = StreamController<Reaction>.broadcast();
 
   Stream<RoomState> get states => _states.stream;
   Stream<ChatMessage> get chat => _chat.stream;
   Stream<ConnectionStatus> get statusStream => _status.stream;
   Stream<String> get errors => _errors.stream;
+  Stream<SignalMessage> get signals => _signals.stream;
+  Stream<Reaction> get reactions => _reactions.stream;
 
   RoomState? lastState;
   ConnectionStatus status = ConnectionStatus.connecting;
@@ -149,6 +153,25 @@ class RoomConnection {
         } else {
           _bestRtt += 20; // slowly forget old best so we can adapt
         }
+      case 'signal':
+        final signalData = m['data'];
+        if (signalData is Map) {
+          _signals.add(
+            SignalMessage(
+              from: m['from'] as String,
+              data: Map<String, dynamic>.from(signalData),
+            ),
+          );
+        }
+      case 'reaction':
+        final reactionFrom = m['from'] as Map<String, dynamic>;
+        _reactions.add(
+          Reaction(
+            fromId: reactionFrom['id'] as String,
+            fromName: reactionFrom['displayName'] as String,
+            emoji: m['emoji'] as String,
+          ),
+        );
       case 'error':
         _errors.add((m['code'] as String?) ?? 'error');
     }
@@ -171,6 +194,13 @@ class RoomConnection {
   void setControlMode(String mode) =>
       _send({'type': 'setControlMode', 'mode': mode});
 
+  void sendSignal(String to, Map<String, dynamic> data) =>
+      _send({'type': 'signal', 'to': to, 'data': data});
+
+  void react(String emoji) => _send({'type': 'react', 'emoji': emoji});
+
+  void setPublic(bool value) => _send({'type': 'setPublic', 'value': value});
+
   Future<void> dispose() async {
     _closed = true;
     _retry?.cancel();
@@ -181,5 +211,7 @@ class RoomConnection {
     await _chat.close();
     await _status.close();
     await _errors.close();
+    await _signals.close();
+    await _reactions.close();
   }
 }

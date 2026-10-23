@@ -115,9 +115,9 @@ class HostMediaService {
         // Let the event loop run so cancel messages and other ranges are handled.
         await Future<void>.delayed(Duration.zero);
       }
-              if (!_cancelled.contains(id)) {
-           channel.sink.add(jsonEncode({'type': 'end', 'id': id}));
-         }
+      if (!_cancelled.contains(id)) {
+        channel.sink.add(jsonEncode({'type': 'end', 'id': id}));
+      }
     } catch (_) {
       channel.sink.add(jsonEncode({'type': 'error', 'id': id}));
     } finally {

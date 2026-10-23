@@ -1,5 +1,6 @@
 # Run on any VPS with Docker and a DNS name pointing at it.
-# Caddy obtains and renews the TLS certificate automatically and proxies WebSockets.
+# Caddy gets and renews the HTTPS certificate and proxies WebSockets.
+# coturn is the relay that makes voice chat work through home routers/firewalls.
 services:
   orvella:
     build: { context: .., dockerfile: Dockerfile }
@@ -11,7 +12,16 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      MAIL_FROM: "${MAIL_FROM:-Orvella <no-reply@localhost>}"
+      TURN_SECRET: ${TURN_SECRET}
+      TURN_HOST: ${ORVELLA_DOMAIN}
     expose: ["8080"]
+    volumes:
+      - orvella_data:/app/data
   caddy:
     image: caddy:2
     restart: unless-stopped
@@ -21,5 +31,25 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--listening-port=3478"
+      - "--realm=${ORVELLA_DOMAIN}"
+      - "--use-auth-secret"
+      - "--static-auth-secret=${TURN_SECRET}"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--fingerprint"
+      - "--no-cli"
+      - "--no-multicast-peers"
+      - "--denied-peer-ip=10.0.0.0-10.255.255.255"
+      - "--denied-peer-ip=172.16.0.0-172.31.255.255"
+      - "--denied-peer-ip=192.168.0.0-192.168.255.255"
 volumes:
   caddy_data:
+  orvella_data:

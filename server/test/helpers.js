@@ -1,10 +1,13 @@
 import WebSocket from 'ws';
 import { buildServer } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { openDb } from '../src/db.js';
+import { Store } from '../src/store.js';
 
-export async function startServer({ fetchImpl, env = {} } = {}) {
+export async function startServer({ fetchImpl, env = {}, dbPath = ':memory:', mailer } = {}) {
   const config = { ...loadConfig({ JWT_SECRET: 'x'.repeat(40), ...env }), logger: false };
-  const app = await buildServer(config, { fetchImpl });
+  const store = new Store(await openDb(dbPath));
+  const app = await buildServer(config, { fetchImpl, store, mailer });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const port = app.server.address().port;
   const base = `http://127.0.0.1:${port}`;

@@ -41,8 +41,7 @@ void main() {
       ),
     );
     expect(find.text('TanimSarker'), findsOneWidget);
-    expect(find.text('Create room'), findsOneWidget);
-    expect(find.text('Join room'), findsOneWidget);
-    expect(find.text('No recent rooms yet.'), findsOneWidget);
+    expect(find.text('Start a party'), findsOneWidget);
+    expect(find.text('Join a party'), findsOneWidget);
   });
 }

@@ -6,6 +6,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../core/models.dart';
 import '../../core/room_connection.dart';
+import 'reaction_overlay.dart';
 import 'room_session.dart';
 
 class CinemaScreen extends ConsumerWidget {
@@ -23,8 +24,9 @@ class CinemaScreen extends ConsumerWidget {
         final state = snap.data;
         return Scaffold(
           appBar: AppBar(
-            title: Text(state?.source?.name ?? 'Cinema room'),
+            title: Text(state?.source?.name ?? 'Your party'),
             actions: [
+              _InviteButton(session: session),
               IconButton(
                 tooltip: 'Choose what to watch',
                 icon: const Icon(Icons.video_library_outlined),
@@ -209,7 +211,22 @@ class _PlayerColumn extends StatelessWidget {
         );
         return Column(
           mainAxisSize: MainAxisSize.min,
-          children: [video, controls],
+          children: [
+            Stack(
+              children: [
+                video,
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ReactionOverlay(
+                      stream: session.connection.reactions,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            controls,
+            _EmojiBar(session: session),
+          ],
         );
       },
     );
@@ -246,7 +263,7 @@ class _SidePanel extends StatelessWidget {
               children: [
                 _ChatTab(session: session),
                 _PeopleTab(session: session, state: state),
-                const _VoiceTab(),
+                _VoiceTab(session: session, state: state),
               ],
             ),
           ),
@@ -366,12 +383,16 @@ class _PeopleTab extends StatelessWidget {
             onChanged: (v) =>
                 session.connection.setControlMode(v ? 'host' : 'everyone'),
           ),
+        if (session.isHost)
+          SwitchListTile(
+            title: const Text('Show in Public parties'),
+            subtitle: const Text('Anyone on Orvella can find and join'),
+            value: state.isPublic,
+            onChanged: session.connection.setPublic,
+          ),
         for (final p in state.participants)
           ListTile(
-            leading: Icon(
-              p.online ? Icons.circle : Icons.circle_outlined,
-              size: 14,
-            ),
+            leading: _Avatar(name: p.displayName),
             title: Text(
               p.displayName + (p.id == state.hostId ? ' (host)' : ''),
             ),
@@ -387,19 +408,182 @@ class _PeopleTab extends StatelessWidget {
 }
 
 class _VoiceTab extends StatelessWidget {
-  const _VoiceTab();
+  const _VoiceTab({required this.session, required this.state});
+  final RoomSession session;
+  final RoomState state;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsetsDirectional.all(24),
-        child: Text(
-          'Voice chat is not implemented yet.\n'
-          'The server already relays WebRTC signaling; the audio client comes in Milestone 5.',
-          textAlign: TextAlign.center,
-        ),
+    final voice = session.voice;
+    return ValueListenableBuilder<bool>(
+      valueListenable: voice.joined,
+      builder: (context, joined, child) {
+        if (!joined) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.mic_none, size: 56),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Talk with everyone in the party.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: () => voice.join(
+                      state.participants
+                          .where((p) => p.online)
+                          .map((p) => p.id),
+                    ),
+                    icon: const Icon(Icons.mic),
+                    label: const Text('Join voice chat'),
+                  ),
+                  ValueListenableBuilder<String?>(
+                    valueListenable: voice.error,
+                    builder: (context, e, child) => e == null
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsetsDirectional.only(top: 12),
+                            child: Text(e, textAlign: TextAlign.center),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsetsDirectional.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: voice.muted,
+                      builder: (context, muted, child) =>
+                          FilledButton.tonalIcon(
+                            onPressed: voice.toggleMute,
+                            icon: Icon(muted ? Icons.mic_off : Icons.mic),
+                            label: Text(muted ? 'Unmute' : 'Mute'),
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () =>
+                        voice.leave(state.participants.map((p) => p.id)),
+                    child: const Text('Leave'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ValueListenableBuilder<Set<String>>(
+                valueListenable: voice.peers,
+                builder: (context, peers, child) => ListView(
+                  children: [
+                    for (final p in state.participants.where((p) => p.online))
+                      ListTile(
+                        leading: _Avatar(name: p.displayName),
+                        title: Text(p.displayName),
+                        trailing: Icon(
+                          p.id == session.userId || peers.contains(p.id)
+                              ? Icons.graphic_eq
+                              : Icons.mic_off_outlined,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _EmojiBar extends StatelessWidget {
+  const _EmojiBar({required this.session});
+  final RoomSession session;
+
+  static const _emojis = ['❤️', '😂', '😮', '😢', '👏', '🔥', '👍'];
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      alignment: WrapAlignment.center,
+      children: [
+        for (final e in _emojis)
+          TextButton(
+            onPressed: () => session.connection.react(e),
+            child: Text(e, style: const TextStyle(fontSize: 26)),
+          ),
+      ],
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  const _Avatar({required this.name});
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final hue = name.codeUnits.fold<int>(0, (a, b) => (a * 31 + b) % 360);
+    return CircleAvatar(
+      backgroundColor: HSLColor.fromAHSL(
+        1,
+        hue.toDouble(),
+        0.5,
+        0.42,
+      ).toColor(),
+      child: Text(
+        name.isEmpty
+            ? '?'
+            : String.fromCharCode(name.runes.first).toUpperCase(),
+        style: const TextStyle(color: Colors.white),
       ),
+    );
+  }
+}
+
+class _InviteButton extends StatelessWidget {
+  const _InviteButton({required this.session});
+  final RoomSession session;
+
+  Future<void> _copy(BuildContext context, RoomInfo info) async {
+    await Clipboard.setData(
+      ClipboardData(
+        text:
+            'Join my Orvella party! Open Orvella, tap "Join a party" and type: ${info.code}',
+      ),
+    );
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Code ${info.code} copied. Send it to your friends!'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<RoomInfo?>(
+      valueListenable: session.info,
+      builder: (context, info, child) {
+        if (info == null) return const SizedBox.shrink();
+        return TextButton.icon(
+          onPressed: () => _copy(context, info),
+          icon: const Icon(Icons.person_add_alt_1),
+          label: Text(info.code),
+        );
+      },
     );
   }
 }

@@ -2,17 +2,25 @@ import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import { Readable } from 'node:stream';
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createMailer } from './mailer.js';
+import { iceServers } from './rtc.js';
 import { authenticate, bearer, issueAccessToken, issueMediaToken } from './auth.js';
 import { verifyJwt } from './jwt.js';
 import { Store } from './store.js';
+import { hashPassword, verifyPassword } from './password.js';
 import { MediaRelay } from './media.js';
 import { DriveManager, DriveError } from './drive.js';
 import { parseRange } from './range.js';
 import { validateClientMessage } from './validate.js';
 
 const NAME_RE = /^[\p{L}\p{N} ._-]{1,32}$/u;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 
-export async function buildServer(config, { fetchImpl = fetch, store = new Store() } = {}) {
+export async function buildServer(
+  config,
+  { fetchImpl = fetch, store = new Store(), mailer = createMailer(config) } = {},
+) {
   const app = Fastify({
     trustProxy: config.isProd,
     logger: config.logger
@@ -26,6 +34,14 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
   });
   const drive = new DriveManager({ config, fetchImpl });
   const relay = new MediaRelay();
+  const dummyHash = await hashPassword('orvella-dummy-password');
+  const googleLogins = new Map();
+  const normEmail = (v) => String(v ?? '').trim().toLowerCase();
+  const codeHash = (email, code) => createHmac('sha256', config.jwtSecret).update(`${email}:${code}`).digest('hex');
+  const page = (title, body = '') =>
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Orvella</title><body style="font-family:sans-serif;text-align:center;padding:3rem"><h2>${title}</h2><p>${body}</p>`;
+  const cleanName = (n) =>
+    String(n ?? '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 32) || 'Friend';
   app.decorate('drive', drive);
 
   await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
@@ -72,7 +88,158 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   // ---------- auth ----------
+  app.post('/auth/signup', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (!store.db) return fail(reply, 503, 'accounts_unavailable');
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const password = String(req.body?.password ?? '');
+    const name = String(req.body?.displayName ?? '').trim();
+    if (email.length > 254 || !EMAIL_RE.test(email)) return fail(reply, 400, 'invalid_email');
+    if (password.length < 8 || password.length > 128) return fail(reply, 400, 'invalid_password');
+    if (!NAME_RE.test(name)) return fail(reply, 400, 'invalid_display_name');
+    let user;
+    try {
+      user = store.createAccount({ email, displayName: name, passwordHash: await hashPassword(password) });
+    } catch (e) {
+      if (String(e?.message).includes('UNIQUE')) return fail(reply, 409, 'email_taken');
+      throw e;
+    }
+    return { token: issueAccessToken(config, user.id), user };
+  });
+
+  app.post('/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const password = String(req.body?.password ?? '').slice(0, 128);
+    const row = store.findAccountByEmail(email);
+    // Always do the same amount of hashing work so response time does not reveal which emails exist.
+    const ok = await verifyPassword(password, row?.password_hash ?? dummyHash);
+    if (!row || !ok) return fail(reply, 401, 'invalid_credentials');
+    const user = store.getUser(row.id);
+    return { token: issueAccessToken(config, user.id), user };
+  });
+
+  // ---------- password reset (email code) ----------
+  app.post('/auth/forgot', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (!store.db) return fail(reply, 503, 'accounts_unavailable');
+    if (!mailer.enabled && config.isProd) return fail(reply, 503, 'email_unavailable');
+    const email = normEmail(req.body?.email);
+    const row = store.findAccountByEmail(email);
+    if (row) {
+      const existing = store.getReset(email);
+      if (!existing || Date.now() - existing.created_at > 60_000) {
+        const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+        store.setReset(email, codeHash(email, code), Date.now() + 15 * 60_000);
+        try {
+          await mailer.send({
+            to: email,
+            subject: 'Your Orvella code',
+            text: `Your Orvella password reset code is ${code}. It expires in 15 minutes. If you did not ask for this, ignore this email.`,
+          });
+        } catch (e) {
+          req.log.error({ err: e }, 'could not send reset email');
+        }
+      }
+    }
+    // Same answer whether or not the email has an account.
+    return { ok: true };
+  });
+
+  app.post('/auth/reset', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (!store.db) return fail(reply, 503, 'accounts_unavailable');
+    const email = normEmail(req.body?.email);
+    const code = String(req.body?.code ?? '').trim();
+    const password = String(req.body?.newPassword ?? '');
+    if (password.length < 8 || password.length > 128) return fail(reply, 400, 'invalid_password');
+    const row = store.getReset(email);
+    if (!row || row.expires_at < Date.now() || row.attempts >= 5) return fail(reply, 400, 'invalid_code');
+    const given = Buffer.from(codeHash(email, code));
+    const expected = Buffer.from(row.code_hash);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      store.bumpResetAttempts(email);
+      return fail(reply, 400, 'invalid_code');
+    }
+    const acct = store.findAccountByEmail(email);
+    if (!acct) return fail(reply, 400, 'invalid_code');
+    store.updatePassword(acct.id, await hashPassword(password));
+    store.deleteReset(email);
+    const user = store.getUser(acct.id);
+    return { token: issueAccessToken(config, user.id), user };
+  });
+
+  // ---------- Google sign-in (server-side OAuth, app polls for the result) ----------
+  const googleRedirect = `${config.publicUrl}/auth/google/callback`;
+  app.post('/auth/google/start', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (!config.googleClientId || !config.googleClientSecret) return fail(reply, 501, 'google_not_configured');
+    const state = randomBytes(16).toString('hex');
+    googleLogins.set(state, { status: 'pending', expires: Date.now() + 10 * 60_000 });
+    const p = new URLSearchParams({
+      client_id: config.googleClientId,
+      redirect_uri: googleRedirect,
+      response_type: 'code',
+      scope: 'openid email profile',
+      prompt: 'select_account',
+      state,
+    });
+    return { url: `https://accounts.google.com/o/oauth2/v2/auth?${p}`, state };
+  });
+
+  app.get('/auth/google/callback', async (req, reply) => {
+    const { code, state } = req.query ?? {};
+    reply.type('text/html');
+    const entry = googleLogins.get(state);
+    if (typeof code !== 'string' || !entry || entry.status !== 'pending' || entry.expires < Date.now()) {
+      return reply.code(400).send(page('Could not sign in', 'Return to Orvella and try again.'));
+    }
+    try {
+      const res = await fetchImpl('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: config.googleClientId,
+          client_secret: config.googleClientSecret,
+          redirect_uri: googleRedirect,
+          grant_type: 'authorization_code',
+        }),
+      });
+      if (!res.ok) throw new Error('token_exchange_failed');
+      // The id_token comes straight from Google's token endpoint over TLS, so its claims can be trusted.
+      const { id_token: idToken } = await res.json();
+      const claims = JSON.parse(Buffer.from(String(idToken).split('.')[1], 'base64url').toString());
+      if (!claims.email || claims.email_verified !== true) throw new Error('email_not_verified');
+      const email = String(claims.email).toLowerCase();
+      if (!store.db) throw new Error('accounts_unavailable');
+      const row = store.findAccountByEmail(email);
+      const user = row
+        ? store.getUser(row.id)
+        : store.createAccount({
+            email,
+            displayName: cleanName(claims.given_name || claims.name),
+            passwordHash: await hashPassword(randomBytes(32).toString('hex')),
+          });
+      googleLogins.set(state, {
+        status: 'done',
+        token: issueAccessToken(config, user.id),
+        user,
+        expires: Date.now() + 5 * 60_000,
+      });
+      return page('You are signed in', 'You can close this tab and return to Orvella.');
+    } catch {
+      googleLogins.delete(state);
+      return reply.code(400).send(page('Could not sign in', 'Return to Orvella and try again.'));
+    }
+  });
+
+  app.get('/auth/google/poll', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const state = String(req.query?.state ?? '');
+    const entry = googleLogins.get(state);
+    if (!entry || entry.expires < Date.now()) return fail(reply, 404, 'unknown_state');
+    if (entry.status === 'pending') return { status: 'pending' };
+    googleLogins.delete(state); // one-time read
+    return { status: 'done', token: entry.token, user: entry.user };
+  });
+
   app.post('/auth/guest', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+    if (!config.allowGuests) return fail(reply, 403, 'guests_disabled');
     const name = String(req.body?.displayName ?? '').trim();
     if (!NAME_RE.test(name)) return fail(reply, 400, 'invalid_display_name');
     const user = store.createUser(name);
@@ -90,7 +257,7 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
     const auth = requireAuth(req, reply);
     if (!auth) return;
     const name = String(req.body?.name ?? '').trim().slice(0, 60) || `${auth.user.displayName}'s room`;
-    const room = store.createRoom(auth.user, name);
+    const room = store.createRoom(auth.user, name, req.body?.isPublic === true);
     return { id: room.id, code: room.code, name: room.name, hostId: room.hostId };
   });
 
@@ -99,6 +266,34 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
     if (!auth) return;
     const room = store.getRoomByCode(String(req.body?.code ?? '').trim());
     if (!room) return fail(reply, 404, 'room_not_found');
+    room.addMember(auth.user);
+    broadcastState(room);
+    return { id: room.id, code: room.code, name: room.name, hostId: room.hostId };
+  });
+
+  app.get('/rooms/public', async (req, reply) => {
+    const auth = requireAuth(req, reply);
+    if (!auth) return;
+    const rooms = [...store.rooms.values()]
+      .filter((r) => r.isPublic)
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        hostName: r.members.get(r.hostId)?.user.displayName ?? '',
+        online: [...r.members.values()].filter((m) => m.sockets.size > 0).length,
+        sourceName: r.source?.name ?? '',
+      }))
+      .filter((r) => r.online > 0)
+      .sort((a, b) => b.online - a.online)
+      .slice(0, 50);
+    return { rooms };
+  });
+
+  app.post('/rooms/:id/join-public', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const auth = requireAuth(req, reply);
+    if (!auth) return;
+    const room = store.getRoom(req.params.id);
+    if (!room || !room.isPublic) return fail(reply, 404, 'room_not_found');
     room.addMember(auth.user);
     broadcastState(room);
     return { id: room.id, code: room.code, name: room.name, hostId: room.hostId };
@@ -115,6 +310,12 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
     const ctx = requireMember(req, reply, req.params.id);
     if (!ctx) return;
     return { token: issueMediaToken(config, ctx.auth.userId, ctx.room.id), expiresInSec: config.mediaTokenTtlSec };
+  });
+
+  app.get('/rtc/config', async (req, reply) => {
+    const auth = requireAuth(req, reply);
+    if (!auth) return;
+    return { iceServers: iceServers(config, auth.userId) };
   });
 
   // ---------- realtime sync (control messages only, never media bytes) ----------
@@ -153,6 +354,12 @@ export async function buildServer(config, { fetchImpl = fetch, store = new Store
               from: { id: user.id, displayName: user.displayName },
               text: msg.text,
               at: Date.now(),
+            });
+          case 'react':
+            return broadcast(room, {
+              type: 'reaction',
+              from: { id: user.id, displayName: user.displayName },
+              emoji: msg.emoji,
             });
           case 'signal': {
             const target = room.members.get(msg.to);

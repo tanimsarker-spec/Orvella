@@ -1,9 +1,10 @@
 export class Room {
-  constructor({ id, code, name, hostId, now = () => Date.now() }) {
+  constructor({ id, code, name, hostId, isPublic = false, now = () => Date.now() }) {
     this.id = id;
     this.code = code;
     this.name = name;
     this.hostId = hostId;
+    this.isPublic = isPublic;
     this.now = now;
     this.playing = false;
     this.positionMs = 0;
@@ -40,6 +41,7 @@ export class Room {
       source: this.source,
       hostId: this.hostId,
       controlMode: this.controlMode,
+      isPublic: this.isPublic,
       buffering: [...this.buffering],
       participants: [...this.members.values()].map((m) => ({
         id: m.user.id,
@@ -80,6 +82,11 @@ export class Room {
       case 'setControlMode':
         if (userId !== this.hostId) return { ok: false, code: 'forbidden' };
         this.controlMode = msg.mode;
+        this.revision += 1;
+        return { ok: true };
+      case 'setPublic':
+        if (userId !== this.hostId) return { ok: false, code: 'forbidden' };
+        this.isPublic = msg.value;
         this.revision += 1;
         return { ok: true };
       case 'buffering':

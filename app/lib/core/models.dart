@@ -60,6 +60,7 @@ class RoomState {
     required this.source,
     required this.hostId,
     required this.controlMode,
+    required this.isPublic,
     required this.buffering,
     required this.participants,
   });
@@ -72,6 +73,7 @@ class RoomState {
   final MediaSourceInfo? source;
   final String hostId;
   final String controlMode;
+  final bool isPublic;
   final List<String> buffering;
   final List<Participant> participants;
 
@@ -86,6 +88,7 @@ class RoomState {
         : MediaSourceInfo.fromJson(j['source'] as Map<String, dynamic>),
     hostId: j['hostId'] as String,
     controlMode: j['controlMode'] as String,
+    isPublic: (j['isPublic'] as bool?) ?? false,
     buffering: (j['buffering'] as List<dynamic>).cast<String>(),
     participants: (j['participants'] as List<dynamic>)
         .map((p) => Participant.fromJson(p as Map<String, dynamic>))
@@ -145,5 +148,45 @@ class DriveFile {
     name: j['name'] as String,
     mimeType: j['mimeType'] as String,
     size: int.tryParse('${j['size'] ?? ''}'),
+  );
+}
+
+class Reaction {
+  const Reaction({
+    required this.fromId,
+    required this.fromName,
+    required this.emoji,
+  });
+  final String fromId;
+  final String fromName;
+  final String emoji;
+}
+
+class SignalMessage {
+  const SignalMessage({required this.from, required this.data});
+  final String from;
+  final Map<String, dynamic> data;
+}
+
+class PublicRoom {
+  const PublicRoom({
+    required this.id,
+    required this.name,
+    required this.hostName,
+    required this.online,
+    required this.sourceName,
+  });
+  final String id;
+  final String name;
+  final String hostName;
+  final int online;
+  final String sourceName;
+
+  factory PublicRoom.fromJson(Map<String, dynamic> j) => PublicRoom(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    hostName: (j['hostName'] as String?) ?? '',
+    online: (j['online'] as num).toInt(),
+    sourceName: (j['sourceName'] as String?) ?? '',
   );
 }
